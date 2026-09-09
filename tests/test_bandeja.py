@@ -1,3 +1,6 @@
+import asyncio
+import threading
+
 import pytest
 from PyQt6.QtGui import QIcon
 
@@ -89,3 +92,43 @@ async def test_cerrar_todo_sigue_aunque_uno_falle(qapp):
     await bandeja._cerrar_todo()  # no debe lanzar
 
     assert orden == ["audio", "cerebro", "canal local"]
+
+
+def test_salir_desde_un_hilo_sin_loop_propio_igual_cierra_todo(qapp):
+    # Reproduce el bug real: el menú de la bandeja se clickea en el hilo
+    # de Qt, que no tiene loop de asyncio propio. Sin pasarle el loop de
+    # la app, ensure_future() agenda la corrutina en un loop que nadie
+    # corre, y _salir() no hace nada observable.
+    orden: list[str] = []
+    terminado = threading.Event()
+
+    async def cerrar_audio():
+        orden.append("audio")
+
+    async def cerrar_cerebro():
+        orden.append("cerebro")
+
+    async def cerrar_canal_local():
+        orden.append("canal local")
+        terminado.set()
+
+    loop = asyncio.new_event_loop()
+    hilo = threading.Thread(target=loop.run_forever, daemon=True)
+    hilo.start()
+
+    bandeja = _bandeja(
+        qapp,
+        cerrar_audio=cerrar_audio,
+        cerrar_cerebro=cerrar_cerebro,
+        cerrar_canal_local=cerrar_canal_local,
+        loop=loop,
+    )
+
+    try:
+        bandeja._salir()  # llamado desde el hilo principal del test, sin loop propio
+        assert terminado.wait(timeout=2), "_cerrar_todo no corrió: _salir no usó el loop real"
+        assert orden == ["audio", "cerebro", "canal local"]
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        hilo.join(timeout=2)
+        loop.close()

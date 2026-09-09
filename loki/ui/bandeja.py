@@ -24,6 +24,7 @@ class Bandeja(QSystemTrayIcon):
         cerrar_cerebro: CierreAsync,
         cerrar_canal_local: CierreAsync,
         parent=None,
+        loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         super().__init__(icono, parent)
         self._on_alternar_overlay = on_alternar_overlay
@@ -31,6 +32,7 @@ class Bandeja(QSystemTrayIcon):
         self._cerrar_audio = cerrar_audio
         self._cerrar_cerebro = cerrar_cerebro
         self._cerrar_canal_local = cerrar_canal_local
+        self._loop = loop
 
         self._menu = QMenu()
 
@@ -51,7 +53,13 @@ class Bandeja(QSystemTrayIcon):
         self.setContextMenu(self._menu)
 
     def _salir(self) -> None:
-        asyncio.ensure_future(self._cerrar_todo())
+        # El menú de la bandeja corre en el hilo de Qt, que no tiene loop
+        # de asyncio propio: sin un loop explícito, ensure_future agenda
+        # la corrutina en un loop que nadie corre y no pasa nada.
+        if self._loop is not None:
+            asyncio.run_coroutine_threadsafe(self._cerrar_todo(), self._loop)
+        else:
+            asyncio.ensure_future(self._cerrar_todo())
 
     async def _cerrar_todo(self) -> None:
         """Cierra audio, cerebro y canal local en ese orden. Si uno falla,

@@ -44,6 +44,7 @@ from loki.herramientas.media import ControlMedia
 from loki.herramientas.monitor import MonitorTerminal
 from loki.herramientas.orca import Orca
 from loki.ui.bandeja import Bandeja
+from loki.ui.paleta import icono_bandeja
 from loki.ui.overlay import Overlay
 from loki.ui.posicion import guardar_posicion, monitores_reales, resolver_posicion
 from loki.voz.limpieza_texto import limpiar_para_voz
@@ -90,7 +91,8 @@ class Loki:
         self._detector_wake_word: DetectorWakeWord | None = None
         self._detector_fin_de_frase: DetectorFinDeFrase | None = None
         self._buffer_frase: list[np.ndarray] = []
-        self._duracion_bloque_s = 0.0
+        self._generacion_actual = 0
+        self._generacion_turno_en_curso = 0
 
         persona = RAIZ / "loki" / "persona" / "system_prompt.md"
         config_cerebro = config_cerebro_desde_config(self.config, ruta_persona=persona, cwd=RAIZ)
@@ -160,8 +162,13 @@ class Loki:
 
     async def _ejecutar_enviar_a_terminal(self, terminal: str, texto: str) -> dict:
         await self.orca.enviar_texto(terminal, texto, enter=True)
-        if terminal == self.registro_sesiones.relay_activa:
-            asyncio.ensure_future(self._reaccionar_relay(terminal))
+        if terminal == self.registro_sesiones.relay_activa and self._loop_asyncio is not None:
+            # Este método corre dentro del loop temporal que abre
+            # ManejadoresCriticos.enviar_a_terminal vía asyncio.run() en el
+            # hilo del servidor HTTP del canal local: ese loop se cierra al
+            # terminar esta corrutina, así que hay que lanzar el sondeo del
+            # relay en el loop real de la app, no en este temporal.
+            asyncio.run_coroutine_threadsafe(self._reaccionar_relay(terminal), self._loop_asyncio)
         return {"terminal": terminal}
 
     async def _reaccionar_relay(self, terminal: str) -> None:
@@ -265,18 +272,20 @@ class Loki:
     # --- Voz de salida -------------------------------------------------
 
     def _on_texto_parcial_cerebro(self, texto_delta: str) -> None:
+        if self._generacion_turno_en_curso != self._generacion_actual:
+            return  # este turno ya fue interrumpido: no sintetizar más
         oraciones = self._segmentador.agregar(texto_delta)
         for oracion in oraciones:
+            generacion = self._generacion_actual
             if self._loop_asyncio is not None:
-                asyncio.run_coroutine_threadsafe(self._hablar(oracion), self._loop_asyncio)
+                asyncio.run_coroutine_threadsafe(self._hablar(oracion, generacion), self._loop_asyncio)
 
-    async def _hablar(self, texto: str) -> None:
+    async def _hablar(self, texto: str, generacion: int | None = None) -> None:
+        if generacion is not None and generacion != self._generacion_actual:
+            return  # se interrumpió mientras se sintetizaba: no encolar
         limpio = limpiar_para_voz(texto)
         if not limpio:
             return
-
-        async def _fallback(texto_completo: str) -> None:
-            self.senales.respuesta.emit(texto_completo)
 
         await hablar_oraciones(
             oraciones=[limpio],
@@ -291,6 +300,8 @@ class Loki:
     async def _procesar_turno(self, texto_usuario: str) -> None:
         self.senales.frase_usuario.emit(texto_usuario)
         self.maquina.fin_de_voz()
+        self._generacion_turno_en_curso = self._generacion_actual
+        mi_generacion = self._generacion_actual
         try:
             if self.registro_sesiones.relay_activa is not None:
                 sesion = self.registro_sesiones.sesion_relay
@@ -299,7 +310,7 @@ class Loki:
             respuesta = await self.cerebro.enviar_turno(texto_usuario)
             resto = self._segmentador.flush()
             if resto:
-                await self._hablar(resto)
+                await self._hablar(resto, mi_generacion)
             self.senales.respuesta.emit(respuesta)
         finally:
             self.maquina.fin_de_reproduccion()
@@ -315,7 +326,8 @@ class Loki:
 
         if self.maquina.estado == Estado.ESCUCHANDO and self._detector_fin_de_frase is not None:
             self._buffer_frase.append(bloque.copy())
-            resultado = self._detector_fin_de_frase.procesar_bloque(bloque, self._duracion_bloque_s)
+            duracion_bloque_s = len(bloque) / self._grabador.tasa_efectiva if self._grabador else 0.0
+            resultado = self._detector_fin_de_frase.procesar_bloque(bloque, duracion_bloque_s)
             if resultado == ResultadoBloque.SIN_VOZ:
                 self._buffer_frase = []
                 self.maquina.sin_voz_tras_activacion()
@@ -335,6 +347,12 @@ class Loki:
         await self._procesar_turno(texto)
 
     def _on_wake_word(self) -> None:
+        # Corta lo que se esté hablando/sintetizando y descarta lo que
+        # quedaba pendiente de un turno anterior (D5/D11: interrupción en
+        # menos de 300 ms). Inofensivo si no había nada sonando.
+        self._generacion_actual += 1
+        self.reproductor.interrumpir()
+
         self._buffer_frase = []
         if self._detector_fin_de_frase is not None:
             self._detector_fin_de_frase.reiniciar()
@@ -352,7 +370,6 @@ class Loki:
             self.senales.respuesta.emit("No pude iniciar la transcripción: revisá GROQ_API_KEY en .env.")
 
         self._grabador = GrabadorContinuo()
-        self._duracion_bloque_s = 0.0  # se ajusta por bloque real más abajo
 
         ruta_modelo = RAIZ / self.config.get("audio", {}).get("wake_word", {}).get("modelo", "modelos/hey_jarvis.onnx")
         umbral = self.config.get("audio", {}).get("wake_word", {}).get("umbral", 0.5)
@@ -390,6 +407,8 @@ class Loki:
         while self._loop_asyncio is None:
             time.sleep(0.01)
 
+        self.coordinador_media.establecer_loop(self._loop_asyncio)
+
         import os
 
         os.environ[VARIABLE_ENTORNO_PUERTO] = str(self.canal_local.puerto_real)
@@ -422,6 +441,7 @@ def main() -> None:
     app.setQuitOnLastWindowClosed(False)
 
     loki = Loki()
+    loki.iniciar_asyncio()
     overlay = Overlay()
 
     def _al_cambiar_estado(anterior, nuevo) -> None:
@@ -453,16 +473,16 @@ def main() -> None:
             asyncio.run_coroutine_threadsafe(loki.cerebro.reiniciar_conversacion(), loki._loop_asyncio)
 
     bandeja = Bandeja(
-        icono=QIcon(),
+        icono=icono_bandeja(),
         on_alternar_overlay=_alternar_overlay,
         on_reiniciar_conversacion=_reiniciar_conversacion,
         cerrar_audio=loki._cerrar_audio,
         cerrar_cerebro=loki._cerrar_cerebro,
         cerrar_canal_local=loki._cerrar_canal_local,
+        loop=loki._loop_asyncio,
     )
     bandeja.show()
 
-    loki.iniciar_asyncio()
     loki.iniciar_audio()
 
     sys.exit(app.exec())

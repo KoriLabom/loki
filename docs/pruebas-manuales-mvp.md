@@ -16,24 +16,24 @@ correrlas y completar la columna de resultado antes de cerrar el change.
 
 | # | Escenario | Spec | Estado | Resultado |
 |---|-----------|------|--------|-----------|
-| A1 | Decir "hey Jarvis" en estado dormido dispara el callback en menos de 500 ms | captura-de-voz | Pendiente | |
-| A2 | Hablar con otra persona sin decir la palabra de activación no graba ni transcribe nada | captura-de-voz | Pendiente | |
+| A1 | Decir "hey Jarvis" en estado dormido dispara el callback en menos de 500 ms | captura-de-voz | **Hecho** | Confirmado con hardware real: la onda empieza a moverse y el estado pasa a escuchando al decir "hey Jarvis". |
+| A2 | Hablar con otra persona sin decir la palabra de activación no graba ni transcribe nada | captura-de-voz | Pendiente | No se probó explícitamente, pero se infiere del diseño (el detector de wake word es el único gate hacia escuchando). |
 | A3 | Con un modelo de wake word configurado a un archivo inexistente, Loki avisa el error (overlay + log) y no se cierra | captura-de-voz | Hecho (test automatizado, tarea 4.2) | `ModeloWakeWordNoEncontrado` con mensaje claro; cubierto por `tests/test_wake_word.py` |
 
 ## Silencio y fin de frase
 
 | # | Escenario | Spec | Estado | Resultado |
 |---|-----------|------|--------|-----------|
-| S1 | El usuario deja de hablar más del umbral de silencio (1,2 s por defecto): la grabación termina y pasa a transcripción | captura-de-voz | Pendiente | Lógica del detector cubierta por tests sintéticos (`tests/test_fin_de_frase.py`); falta la corrida con voz real |
-| S2 | Pasan 5 s desde la activación sin voz: Loki vuelve a dormido sin transcribir | captura-de-voz | Pendiente | Ídem: lógica cubierta por test, falta la corrida real |
-| S3 | La grabación llega a los 30 s: se corta y se transcribe lo grabado hasta ahí | captura-de-voz | Pendiente | Ídem |
+| S1 | El usuario deja de hablar más del umbral de silencio (1,2 s por defecto): la grabación termina y pasa a transcripción | captura-de-voz | **Hecho** | Confirmado con voz real: **encontrado y corregido un bug real** — `main.py` nunca calculaba la duración real de cada bloque de audio (quedaba fija en `0.0`), así que el reloj interno del detector de silencio nunca avanzaba y jamás cortaba. Corregido calculando la duración desde el tamaño del bloque y la tasa de muestreo. |
+| S2 | Pasan 5 s desde la activación sin voz: Loki vuelve a dormido sin transcribir | captura-de-voz | **Hecho** | Confirmado con el mismo fix: activar y quedarse en silencio vuelve a dormido sin llamar al cerebro. |
+| S3 | La grabación llega a los 30 s: se corta y se transcribe lo grabado hasta ahí | captura-de-voz | Pendiente | Mismo mecanismo que S1/S2, ya corregido; falta la corrida específica de 30 s hablando sin parar. |
 | S4 | Transcripción vacía o alucinada: Loki vuelve a dormido sin llamar al cerebro y avisa brevemente | captura-de-voz | Pendiente | Filtro de alucinaciones cubierto por test (`tests/test_transcriber.py`); falta la corrida real con silencio/ruido |
 
 ## Interrupción
 
 | # | Escenario | Spec | Estado | Resultado |
 |---|-----------|------|--------|-----------|
-| I1 | Loki hablando + el usuario dice la palabra de activación: la voz se corta en menos de 300 ms y pasa a escuchando | captura-de-voz, voz-de-salida | Pendiente | Transición de estados y corte de cola cubiertos por tests (`tests/test_estados.py`, `tests/test_reproductor.py`); falta medir el tiempo real |
+| I1 | Loki hablando + el usuario dice la palabra de activación: la voz se corta en menos de 300 ms y pasa a escuchando | captura-de-voz, voz-de-salida | **Hecho** | Confirmado con voz real: **encontrado y corregido un bug real** — nada llamaba a `reproductor.interrumpir()` al detectar la palabra de activación mientras Loki hablaba, así que seguía terminando su respuesta y encolando la siguiente. Corregido en `_on_wake_word` (llama a `interrumpir()` y descarta con un contador de "generación" las oraciones del turno viejo que todavía no se habían sintetizado). |
 
 ## Media
 
@@ -70,10 +70,10 @@ correrlas y completar la columna de resultado antes de cerrar el change.
 
 | # | Escenario | Spec | Estado | Resultado |
 |---|-----------|------|--------|-----------|
-| O1 | Los cinco estados se ven distinguibles (dormido, escuchando, pensando, hablando, agente trabajando) | overlay-de-estado | Parcial | Render offscreen verificado (capturas PNG durante la tarea 6.2): la onda, el punto tenue de dormido y los indicadores de relay/agente se ven correctos; el entorno de renderizado sin pantalla no tiene fuentes instaladas, así que el texto salió en blanco en las capturas. En una pantalla real con Segoe UI instalada (todas las Windows) esto no debería pasar, pero falta confirmarlo mirando la ventana real. |
-| O2 | La onda reacciona al volumen mientras escucha | overlay-de-estado | Pendiente | Lógica de amplitud cubierta por test; falta verla moverse con voz real |
-| O3 | Primera ejecución sin posición guardada: aparece centrado abajo en el monitor principal | overlay-de-estado | Pendiente | Resolución de posición cubierta por `tests/test_posicion.py`; falta la corrida real |
-| O4 | Mover el overlay y cerrar Loki: la próxima vez aparece en el mismo lugar si el monitor sigue conectado | overlay-de-estado | Pendiente | Ídem |
+| O1 | Los cinco estados se ven distinguibles (dormido, escuchando, pensando, hablando, agente trabajando) | overlay-de-estado | Parcial | **Hecho** para dormido/escuchando/pensando/hablando: confirmados visualmente en pantalla real durante una conversación de punta a punta, con texto legible (a diferencia del render offscreen de la tarea 6.2, que no tenía fuentes). Falta ver "agente trabajando" (requiere una sesión de relay o un monitor de apply activo). |
+| O2 | La onda reacciona al volumen mientras escucha | overlay-de-estado | **Hecho** | Confirmado: la onda se mueve al hablar después de decir "hey Jarvis". |
+| O3 | Primera ejecución sin posición guardada: aparece centrado abajo en el monitor principal | overlay-de-estado | **Hecho** | Confirmado en la primera corrida (sin `config.local.yaml`): apareció centrado abajo. |
+| O4 | Mover el overlay y cerrar Loki: la próxima vez aparece en el mismo lugar si el monitor sigue conectado | overlay-de-estado | Pendiente | No se probó (no se arrastró el overlay todavía). |
 | O5 | La posición guardada corresponde a un monitor desconectado: vuelve a la posición por defecto | overlay-de-estado | Hecho (test automatizado) | `tests/test_posicion.py::test_posicion_fuera_de_todas_las_pantallas_se_descarta` |
 | O6 | Cambiar el acento en `paleta.py` cambia la onda y los textos sin tocar otro código | overlay-de-estado | **Hecho** | Verificado visualmente (tarea 6.1): capturas antes/después con acento cambiado de terracota a azul, la onda cambió de color. |
 
@@ -81,27 +81,69 @@ correrlas y completar la columna de resultado antes de cerrar el change.
 
 | # | Escenario | Spec | Estado | Resultado |
 |---|-----------|------|--------|-----------|
-| B1 | Mostrar/ocultar overlay desde el menú de la bandeja | overlay-de-estado | Pendiente | Wiring del menú cubierto por `tests/test_bandeja.py`; falta clickearlo de verdad |
-| B2 | Reiniciar conversación desde la bandeja | overlay-de-estado | Pendiente | Ídem |
-| B3 | Salir detiene la escucha, cierra el cerebro y termina sin procesos huérfanos | overlay-de-estado | Parcial | El orden de cierre (audio, cerebro, canal local) está cubierto por `tests/test_bandeja.py`. Además, al terminar la tarea 10.1 se mató el árbol completo de procesos de una corrida real de `python -m loki.main` (incluido el subproceso de `claude`) y no quedaron huérfanos — pero fue con `taskkill /T`, no clickeando "Salir" en la bandeja real. Falta esa verificación puntual. |
+| B1 | Mostrar/ocultar overlay desde el menú de la bandeja | overlay-de-estado | **Hecho** | Confirmado clickeando de verdad: el overlay aparece y desaparece. |
+| B2 | Reiniciar conversación desde la bandeja | overlay-de-estado | **Hecho** | Confirmado clickeando de verdad. |
+| B3 | Salir detiene la escucha, cierra el cerebro y termina sin procesos huérfanos | overlay-de-estado | **Hecho** | Confirmado clickeando "Salir" en la bandeja real: el overlay y el ícono desaparecieron, el proceso terminó con código 0, y no quedó ningún `python.exe` ni subproceso `claude` huérfano. **Encontrado y corregido un bug real en el camino**: el menú de la bandeja corre en el hilo de Qt, que no tiene loop de asyncio propio, así que `_salir()` agendaba el cierre con `asyncio.ensure_future` en un loop que nadie corría y no pasaba nada. Se corrigió pasándole a `Bandeja` el loop real de la app y usando `run_coroutine_threadsafe`. |
 
 ## Voz de salida
 
 | # | Escenario | Spec | Estado | Resultado |
 |---|-----------|------|--------|-----------|
-| V1 | La voz por defecto (`es-MX-DaliaNeural`) se escucha en español neutro | voz-de-salida | Parcial | La síntesis real contra el servicio de edge-tts produjo un MP3 válido y de duración razonable (tarea 3.2); falta escucharlo con parlantes reales. |
-| V2 | Una respuesta larga empieza a sonar antes de terminar de generarse | voz-de-salida | Pendiente | Segmentación por oración y cola de reproducción cubiertas por tests (`tests/test_tts.py`, `tests/test_reproductor.py`); falta la percepción real de la latencia |
+| V1 | La voz por defecto (`es-MX-DaliaNeural`) se escucha en español neutro | voz-de-salida | **Hecho** | Confirmado con parlantes reales: se escucha clara, en español neutro. |
+| V2 | Una respuesta larga empieza a sonar antes de terminar de generarse | voz-de-salida | Pendiente | Se escuchó una respuesta completa correctamente, pero no se midió específicamente la latencia hasta la primera oración en una respuesta larga. |
 | V3 | Un bloque de código en la respuesta no se lee en voz alta | voz-de-salida | Hecho (test automatizado) | `tests/test_limpieza_texto.py` |
 | V4 | Si falla la síntesis, el texto completo queda visible en el overlay y Loki sigue operativo | voz-de-salida | Hecho (test automatizado) | `tests/test_salida.py` |
 
 ---
 
-**Resumen**: de los escenarios sin cobertura automática completa, los que
-dependían de poder ejecutar comandos reales contra Claude Code, Orca o
-Windows (media, MCP, confirmación crítica, relay, skill, CLAUDE.md) se
-verificaron en vivo durante la implementación. Los que dependen de
-escuchar, hablar, o mirar la pantalla real (activación por voz, timings
-de silencio e interrupción al oído, calidad de la voz, posición del
-overlay en un monitor real, los tres ítems de la bandeja) quedan
-pendientes de que alguien con micrófono, parlantes y pantalla los corra
-y complete la columna de resultado antes de cerrar el change.
+## Sesión de pruebas con hardware real (2026-09-09)
+
+Con el usuario frente a la máquina, micrófono y parlantes reales, se
+corrió `python -m loki.main` de verdad y se probó el flujo completo:
+activación, silencio, interrupción, transcripción, respuesta hablada, y
+los tres ítems de la bandeja. **Se encontraron y corrigieron 5 bugs
+reales** que ningún test automatizado podía atrapar porque dependían de
+la integración real entre hilos (Qt, audio, asyncio) y del hardware:
+
+1. **Ícono de bandeja vacío** (`main.py` le pasaba un `QIcon()` sin
+   imagen a `Bandeja`). Se agregó `loki/ui/paleta.py:icono_bandeja()`,
+   que genera un círculo terracota simple en código.
+2. **`CoordinadorMedia` no podía lanzar corrutinas desde el hilo de
+   audio** (el callback de wake word corre en el hilo de PortAudio, sin
+   loop de asyncio propio; `asyncio.ensure_future` fallaba con
+   `RuntimeError`). Se le agregó un loop explícito y
+   `run_coroutine_threadsafe`.
+3. **El detector de fin de frase nunca avanzaba su reloj interno**:
+   `main.py` nunca calculaba la duración real de cada bloque de audio
+   (quedaba en `0.0` fija), así que ni el silencio ni el máximo de 30 s
+   cortaban nunca la grabación. Se corrigió calculando la duración real
+   desde el tamaño del bloque y la tasa de muestreo.
+4. **La interrupción por wake word no cortaba la voz**: nada llamaba a
+   `reproductor.interrumpir()` al detectar la activación mientras Loki
+   hablaba. Se agregó la llamada, más un contador de "generación" para
+   descartar oraciones de un turno ya interrumpido que todavía no se
+   habían sintetizado.
+5. **"Salir" de la bandeja no hacía nada**: el menú corre en el hilo de
+   Qt, sin loop de asyncio propio, así que `asyncio.ensure_future`
+   agendaba el cierre en un loop que nadie corría. Se le pasó a
+   `Bandeja` el loop real de la app y se usó `run_coroutine_threadsafe`.
+
+Después de estos arreglos, se confirmó en vivo: activación por wake
+word, fin de frase por silencio, transcripción real, respuesta hablada
+en español neutro, los cuatro estados principales del overlay con la
+onda reactiva, la posición por defecto centrada abajo, interrupción por
+wake word mientras habla, y las tres acciones de la bandeja (mostrar/
+ocultar, reiniciar, salir sin procesos huérfanos).
+
+**Resumen general**: de los escenarios sin cobertura automática
+completa, los que dependían de poder ejecutar comandos reales contra
+Claude Code, Orca o Windows (media, MCP, confirmación crítica, relay,
+skill, CLAUDE.md) se verificaron en vivo durante la implementación; los
+que dependían de escuchar, hablar o mirar la pantalla real se
+verificaron en esta sesión con el usuario y el hardware real. Quedan
+pendientes: A2 (conversación ajena sin wake word), S3 (corte a los 30 s
+hablando sin parar), S4 (transcripción vacía/alucinada con silencio o
+ruido real), O1 el indicador de "agente trabajando", O4 (persistencia de
+posición movida), V2 (medir la latencia real hasta la primera oración),
+y C2/C3 (la secuencia hablada de confirmación de una acción crítica, que
+requiere disparar una acción como cerrar una terminal por voz).
