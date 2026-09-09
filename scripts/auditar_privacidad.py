@@ -6,6 +6,12 @@ macOS, correos, patrones de keys/tokens, y los términos de la lista
 privada de `config.local.yaml`. Termina con código distinto de cero si
 encuentra algo.
 
+Los hallazgos esperables (fixtures de test, o líneas del propio script
+que definen los patrones y por lo tanto siempre los matchean) se pueden
+marcar como permitidos en `config.yaml`, sección `auditoria_privacidad`:
+`archivos_permitidos` (glob sobre la ruta del archivo, ej. `tests/**`) y
+`patrones_permitidos` (regex sobre el contenido de la línea).
+
 Uso: python scripts/auditar_privacidad.py [rango-de-git]
 Por defecto compara la rama actual contra origin/main.
 Con `--arbol`, audita todo el árbol de trabajo en vez de un diff (pensado
@@ -13,6 +19,7 @@ para correr una sola vez antes del primer push a un repo público).
 """
 from __future__ import annotations
 
+import fnmatch
 import re
 import subprocess
 import sys
@@ -25,8 +32,13 @@ _PATRON_RUTA_WINDOWS = re.compile(r"[A-Za-z]:[\\/]Users[\\/][^\\/\s\"']+", re.IG
 _PATRON_RUTA_MACOS = re.compile(r"/Users/[^/\s\"']+")
 _PATRON_CORREO = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 _PATRON_KEY = re.compile(r"\b(sk-[A-Za-z0-9_-]{10,}|gsk_[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9_-]{10,})\b")
+# El lookahead exige al menos un dígito en el valor capturado: distingue una
+# key/token real (siempre tiene dígitos) de un identificador de código que
+# solo contiene la palabra "token"/"key"/"secret" (nombre de constante,
+# variable, o llamada a método encadenada), que no debería auditarse.
 _PATRON_KEY_GENERICA = re.compile(
-    r"\b\w*(?:key|token|secret)\w*\s*[:=]\s*['\"]?[A-Za-z0-9+/_.-]{16,}['\"]?", re.IGNORECASE
+    r"\b\w*(?:key|token|secret)\w*\s*[:=]\s*['\"]?(?=[A-Za-z0-9+/_.-]*\d)[A-Za-z0-9+/_.-]{16,}['\"]?",
+    re.IGNORECASE,
 )
 
 
@@ -73,9 +85,43 @@ def _cargar_terminos_privados(raiz: Path) -> list[str]:
     return [t for t in datos.get("terminos_privados", []) if t]
 
 
-def _hallazgos_en_lineas(lineas_iter, terminos_privados: list[str]) -> list[Hallazgo]:
+def _cargar_permitidos(raiz: Path) -> tuple[list[str], list[str]]:
+    """Lee `auditoria_privacidad.archivos_permitidos` (glob) y
+    `.patrones_permitidos` (regex) de `config.yaml`."""
+    ruta = raiz / "config.yaml"
+    if not ruta.exists():
+        return [], []
+    datos = yaml.safe_load(ruta.read_text(encoding="utf-8")) or {}
+    seccion = datos.get("auditoria_privacidad") or {}
+    archivos = [a for a in seccion.get("archivos_permitidos", []) if a]
+    patrones = [p for p in seccion.get("patrones_permitidos", []) if p]
+    return archivos, patrones
+
+
+def _permitido(
+    archivo: str,
+    contenido: str,
+    archivos_permitidos: list[str],
+    patrones_permitidos: list[re.Pattern[str]],
+) -> bool:
+    archivo_norm = archivo.replace("\\", "/")
+    if any(fnmatch.fnmatch(archivo_norm, patron) for patron in archivos_permitidos):
+        return True
+    return any(patron.search(contenido) for patron in patrones_permitidos)
+
+
+def _hallazgos_en_lineas(
+    lineas_iter,
+    terminos_privados: list[str],
+    archivos_permitidos: list[str] | None = None,
+    patrones_permitidos: list[str] | None = None,
+) -> list[Hallazgo]:
+    archivos_permitidos = archivos_permitidos or []
+    patrones_compilados = [re.compile(p) for p in (patrones_permitidos or [])]
     hallazgos: list[Hallazgo] = []
     for archivo, numero, contenido in lineas_iter:
+        if _permitido(archivo, contenido, archivos_permitidos, patrones_compilados):
+            continue
         if _PATRON_RUTA_WINDOWS.search(contenido):
             hallazgos.append(Hallazgo(archivo, numero, "ruta_windows", contenido.strip()))
         if _PATRON_RUTA_MACOS.search(contenido):
@@ -92,8 +138,15 @@ def _hallazgos_en_lineas(lineas_iter, terminos_privados: list[str]) -> list[Hall
     return hallazgos
 
 
-def auditar(diff_texto: str, terminos_privados: list[str] | None = None) -> list[Hallazgo]:
-    return _hallazgos_en_lineas(_lineas_agregadas(diff_texto), terminos_privados or [])
+def auditar(
+    diff_texto: str,
+    terminos_privados: list[str] | None = None,
+    archivos_permitidos: list[str] | None = None,
+    patrones_permitidos: list[str] | None = None,
+) -> list[Hallazgo]:
+    return _hallazgos_en_lineas(
+        _lineas_agregadas(diff_texto), terminos_privados or [], archivos_permitidos, patrones_permitidos
+    )
 
 
 def _archivos_del_arbol(raiz: Path) -> list[str]:
@@ -117,11 +170,18 @@ def _lineas_de_archivo(raiz: Path, archivos: list[str]):
             yield archivo, numero, contenido
 
 
-def auditar_arbol(raiz: Path, terminos_privados: list[str] | None = None) -> list[Hallazgo]:
+def auditar_arbol(
+    raiz: Path,
+    terminos_privados: list[str] | None = None,
+    archivos_permitidos: list[str] | None = None,
+    patrones_permitidos: list[str] | None = None,
+) -> list[Hallazgo]:
     """Audita todo el árbol de trabajo (no solo un diff): pensado para
     correr una vez antes del primer push a un repo público."""
     archivos = _archivos_del_arbol(raiz)
-    return _hallazgos_en_lineas(_lineas_de_archivo(raiz, archivos), terminos_privados or [])
+    return _hallazgos_en_lineas(
+        _lineas_de_archivo(raiz, archivos), terminos_privados or [], archivos_permitidos, patrones_permitidos
+    )
 
 
 def _obtener_diff(rango: str) -> str:
@@ -142,13 +202,14 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     raiz = Path.cwd()
     terminos_privados = _cargar_terminos_privados(raiz)
+    archivos_permitidos, patrones_permitidos = _cargar_permitidos(raiz)
 
     if argv and argv[0] == "--arbol":
-        hallazgos = auditar_arbol(raiz, terminos_privados)
+        hallazgos = auditar_arbol(raiz, terminos_privados, archivos_permitidos, patrones_permitidos)
     else:
         rango = argv[0] if argv else _rango_por_defecto()
         diff_texto = _obtener_diff(rango)
-        hallazgos = auditar(diff_texto, terminos_privados)
+        hallazgos = auditar(diff_texto, terminos_privados, archivos_permitidos, patrones_permitidos)
 
     if not hallazgos:
         print("Auditoría de privacidad: sin hallazgos.")

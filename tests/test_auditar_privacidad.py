@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from auditar_privacidad import auditar, auditar_arbol
+from auditar_privacidad import _cargar_permitidos, auditar, auditar_arbol
 
 
 def _diff(archivo: str, lineas_agregadas: list[str], numero_inicial: int = 1) -> str:
@@ -55,6 +55,41 @@ def test_token_generico_asignado_se_detecta():
     diff = _diff("notas.txt", ["api_token: 'ab12cd34ef56gh78ij90kl12mn34op56'"])
     hallazgos = auditar(diff)
     assert any(h.tipo == "posible_key_o_token" for h in hallazgos)
+
+
+def test_nombre_de_constante_con_key_o_token_no_se_detecta():
+    """Un identificador de código (constante, variable) que solo contiene
+    la palabra "token"/"key"/"secret" no es un secreto: no tiene dígitos."""
+    diff = _diff("loki/herramientas/canal_local.py", ['VARIABLE_ENTORNO_TOKEN = "LOKI_CANAL_LOCAL_TOKEN"'])
+    assert auditar(diff) == []
+
+
+def test_llamada_a_metodo_encadenada_con_token_no_se_detecta():
+    diff = _diff("loki/herramientas/canal_local.py", ["token_recibido = autorizacion.removeprefix(\"Bearer \")"])
+    assert auditar(diff) == []
+
+
+def test_key_generica_sin_prefijo_conocido_pero_con_digitos_se_detecta():
+    diff = _diff("notas.txt", ["secret_value = 'no-es-un-prefijo-conocido-1234'"])
+    hallazgos = auditar(diff)
+    assert any(h.tipo == "posible_key_o_token" for h in hallazgos)
+
+
+def test_archivo_permitido_por_glob_no_produce_hallazgos():
+    diff = _diff("tests/fixtures/con_datos_de_ejemplo.py", ["contacto: persona@ejemplo.com"])
+    assert auditar(diff, archivos_permitidos=["tests/**"]) == []
+
+
+def test_archivo_no_cubierto_por_glob_permitido_igual_se_detecta():
+    diff = _diff("loki/config.py", ["contacto: persona@ejemplo.com"])
+    hallazgos = auditar(diff, archivos_permitidos=["tests/**"])
+    assert any(h.tipo == "correo" for h in hallazgos)
+
+
+def test_patron_permitido_suprime_el_hallazgo_en_cualquier_archivo():
+    diff = _diff("scripts/auditar_privacidad.py", ['_PATRON_RUTA_MACOS = re.compile(r"/Users/[^/\\s\\"\']+")'])
+    hallazgos = auditar(diff, patrones_permitidos=[r"^_PATRON_\w+\s*=\s*re\.compile"])
+    assert hallazgos == []
 
 
 def test_termino_privado_configurado_se_detecta_sin_mostrar_la_linea():
@@ -115,3 +150,21 @@ def test_auditar_arbol_sin_hallazgos_en_arbol_limpio(tmp_path):
     (repo / "README.md").write_text("# Un proyecto cualquiera\n", encoding="utf-8")
 
     assert auditar_arbol(repo) == []
+
+
+def test_cargar_permitidos_lee_config_yaml(tmp_path):
+    (tmp_path / "config.yaml").write_text(
+        "auditoria_privacidad:\n"
+        "  archivos_permitidos:\n"
+        "    - 'tests/**'\n"
+        "  patrones_permitidos:\n"
+        "    - '@ejemplo\\.com'\n",
+        encoding="utf-8",
+    )
+    archivos, patrones = _cargar_permitidos(tmp_path)
+    assert archivos == ["tests/**"]
+    assert patrones == [r"@ejemplo\.com"]
+
+
+def test_cargar_permitidos_sin_config_yaml_devuelve_listas_vacias(tmp_path):
+    assert _cargar_permitidos(tmp_path) == ([], [])
