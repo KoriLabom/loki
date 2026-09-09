@@ -58,3 +58,18 @@ def test_accion_desconocida_devuelve_404(servidor):
     s, token = servidor
     codigo, cuerpo = _post(s.puerto_real, token, {"accion": "no_existe"})
     assert codigo == 404
+
+
+def test_fallo_del_manejador_se_registra_en_el_log(servidor, caplog):
+    """Antes se tragaba la excepción en silencio (devuelta como JSON pero
+    sin log): encontrado con hardware real (tarea 10.3, C3) tratando de
+    diagnosticar un error que el cerebro reportaba sin rastro en el log."""
+    s, token = servidor
+    s.registrar("falla", lambda _datos: (_ for _ in ()).throw(ValueError("boom")))
+
+    with caplog.at_level("ERROR"):
+        codigo, cuerpo = _post(s.puerto_real, token, {"accion": "falla"})
+
+    assert codigo == 500
+    assert cuerpo == {"error": "boom"}
+    assert any("falla" in registro.message for registro in caplog.records)

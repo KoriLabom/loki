@@ -7,10 +7,13 @@ variable de entorno. Sin el token correcto, toda llamada se rechaza.
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 ManejadorAccion = Callable[[dict], dict]
 
@@ -75,6 +78,7 @@ class ServidorCanalLocal:
                     resultado = manejador(cuerpo.get("datos", {}))
                     self._responder(200, resultado)
                 except Exception as exc:
+                    logger.exception("Fallo el manejador de la acción '%s'", nombre_accion)
                     self._responder(500, {"error": str(exc)})
 
             def _responder(self, codigo: int, cuerpo: dict) -> None:

@@ -8,10 +8,13 @@ ejecuta, sin importar lo que el cerebro afirme.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Awaitable, Callable
 
 from loki.herramientas.confirmacion import RegistroConfirmaciones
 from loki.herramientas.orca import Orca
+
+logger = logging.getLogger(__name__)
 
 EjecutorCerrarTerminal = Callable[[str], Awaitable[dict]]
 EjecutorEliminarWorktree = Callable[[str], Awaitable[dict]]
@@ -47,9 +50,12 @@ class ManejadoresCriticos:
     async def _cerrar_terminal(self, datos: dict) -> dict:
         terminal = datos.get("terminal", "")
         confirmacion_id = datos.get("confirmacion_id") or ""
+        logger.info("cerrar_terminal: terminal=%s confirmacion_id=%s", terminal, confirmacion_id)
         if not self._registro.es_valida(confirmacion_id, "cerrar_terminal"):
+            logger.info("cerrar_terminal: confirmación inválida o vencida, no se ejecuta")
             return {"error": "confirmación inválida o vencida", "ejecutado": False}
         resultado = await self._ejecutar_cerrar_terminal(terminal)
+        logger.info("cerrar_terminal: ejecutado, resultado=%s", resultado)
         return {"ejecutado": True, **resultado}
 
     def eliminar_worktree(self, datos: dict) -> dict:

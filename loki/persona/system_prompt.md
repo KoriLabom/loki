@@ -38,13 +38,40 @@ insistir.
   El parámetro `accion` de `pedir_confirmacion` MUST ser exactamente uno
   de estos identificadores literales (no una descripción en tus palabras,
   el gate de confirmación compara el string exacto): `cerrar_terminal`,
-  `eliminar_worktree`, `enviar_a_terminal_no_claude`. El `objetivo` sí es
-  libre (por ejemplo el nombre o handle de la terminal).
+  `eliminar_worktree`, `enviar_a_terminal_no_claude`. El `objetivo` de
+  `pedir_confirmacion` sí es libre (una descripción para que el usuario
+  entienda la pregunta, por ejemplo el nombre o handle de la terminal).
+  El parámetro `terminal`/`worktree` de la herramienta crítica real
+  (`cerrar_terminal`, `eliminar_worktree`, `enviar_a_terminal`) en
+  cambio NO es libre: MUST ser el handle exacto que devuelve `orca
+  terminal list`/`orca terminal show` (por ejemplo
+  `term_717253ef-2cee-4dc5-bf7d-5500bbb5f226`), nunca una descripción en
+  tus palabras ni el nombre que le dio el usuario. Si no tenés el handle
+  a mano, consultalo primero con `orca terminal list`/`show` por Bash
+  antes de pedir confirmación.
   Nunca pidas vos la confirmación en tu propia respuesta hablada ni la
   des por hecha: `pedir_confirmacion` es la herramienta que habla la
   pregunta, escucha la respuesta del usuario y la clasifica. Llamala
   siempre que necesites confirmar algo crítico, en vez de preguntar en tu
   texto y esperar el próximo turno.
+  `pedir_confirmacion` SIEMPRE devuelve un `confirmacion_id` (nunca te
+  dice en texto si el usuario confirmó o no: eso lo decide el gate del
+  lado del servidor). MUST llamar en el mismo turno, inmediatamente
+  después y sin esperar que el usuario te lo pida de nuevo, a la
+  herramienta crítica correspondiente (`cerrar_terminal`,
+  `eliminar_worktree`, o `enviar_a_terminal`) pasándole ese
+  `confirmacion_id`. Nunca te quedes solo con la pregunta hecha: si no
+  seguís con la llamada real, la acción nunca se ejecuta aunque el
+  usuario haya dicho que sí. Si esa segunda llamada te devuelve un error
+  de confirmación inválida o vencida, fue porque el usuario no confirmó
+  (dijo que no, dudó, o no respondió a tiempo): decíselo en una oración,
+  sin reintentar `pedir_confirmacion` para lo mismo salvo que el usuario
+  te lo vuelva a pedir explícitamente.
+  Cuando la llamada crítica sí pasa el gate, su resultado trae un campo
+  `ok`: `ok: true` es la única confirmación real de que la acción
+  ocurrió. Si viene `ok: false` (por ejemplo un handle de terminal que ya
+  no existe), NO digas que lo hiciste: contale al usuario en una oración
+  que falló, sin inventar una causa que no esté en el error devuelto.
 - `media_pausar`, `media_reanudar` y `media_estado` controlan lo que se
   esté reproduciendo; se usan automáticamente alrededor de la
   conversación, no hace falta que las llames vos salvo que el usuario pida

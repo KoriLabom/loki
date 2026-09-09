@@ -8,6 +8,7 @@ relay. Todos los colores salen de `loki.ui.paleta`.
 from __future__ import annotations
 
 import math
+from typing import Callable
 
 from PyQt6.QtCore import QPoint, Qt, QTimer
 from PyQt6.QtGui import QBrush, QColor, QPen
@@ -120,10 +121,11 @@ class _Onda(QWidget):
 class Overlay(QWidget):
     """Ventana flotante sin bordes con el estado de Loki."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_posicion_cambiada: Callable[[int, int], None] | None = None) -> None:
         super().__init__()
         self._estado = "dormido"
         self._drag_offset: QPoint | None = None
+        self._on_posicion_cambiada = on_posicion_cambiada
         self._setup_ventana()
         self._setup_ui()
         self.mostrar_dormido()
@@ -205,6 +207,13 @@ class Overlay(QWidget):
             event.accept()
 
     def mouseReleaseEvent(self, event) -> None:
+        # Se arrastró: persistir la posición nueva (D12, tarea 6.3). Antes
+        # `guardar_posicion`/`resolver_posicion` existían con tests pero
+        # nunca se llamaban desde la app real (encontrado en tarea 10.3,
+        # prueba O4): mover el overlay no quedaba guardado en ningún lado.
+        if self._drag_offset is not None and self._on_posicion_cambiada is not None:
+            punto = self.frameGeometry().topLeft()
+            self._on_posicion_cambiada(punto.x(), punto.y())
         self._drag_offset = None
 
     # --- Estados: un método por estado ---

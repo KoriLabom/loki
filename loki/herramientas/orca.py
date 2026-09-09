@@ -101,6 +101,12 @@ class Orca:
             argv += ["--base-branch", base_branch]
         return await self._correr(argv)
 
+    async def cerrar_terminal(self, handle: str) -> dict:
+        return await self._correr(["terminal", "close", "--terminal", handle])
+
+    async def eliminar_worktree(self, worktree: str) -> dict:
+        return await self._correr(["worktree", "rm", "--worktree", worktree])
+
 
 def extraer_texto_y_cursor(resultado_leer: dict) -> tuple[str, str | None]:
     """Extrae el texto nuevo y el cursor siguiente de un resultado de

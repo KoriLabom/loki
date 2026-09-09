@@ -16,6 +16,14 @@ from mcp.server.mcpserver import MCPServer
 
 from loki.herramientas.canal_local import VARIABLE_ENTORNO_PUERTO, VARIABLE_ENTORNO_TOKEN
 
+# pedir_confirmacion puede tardar en la práctica: habla la pregunta,
+# escucha hasta ESPERA_RESPUESTA_S (10 s por defecto, con margen interno
+# de +3 s) y después transcribe la respuesta. Encontrado con hardware
+# real (tarea 10.3, prueba C2): con 15 s el cliente HTTP abortaba la
+# conexión antes de que el canal local terminara de responder, y el
+# cerebro lo veía como un "problema de comunicación con Orca".
+_TIMEOUT_HTTP_S = 45
+
 
 class ClienteCanalLocal:
     """Llama al canal local del proceso principal por HTTP."""
@@ -37,7 +45,7 @@ class ClienteCanalLocal:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT_HTTP_S) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
             return json.loads(e.read())
@@ -66,7 +74,11 @@ def construir_servidor(cliente: ClienteCanalLocal) -> MCPServer:
     @servidor.tool()
     async def cerrar_terminal(terminal: str, confirmacion_id: str) -> dict:
         """Cierra una terminal de Orca. Exige un confirmacion_id válido
-        para la acción 'cerrar_terminal'."""
+        para la acción 'cerrar_terminal'.
+
+        `terminal` MUST ser el handle exacto de `orca terminal list`/
+        `show` (por ejemplo 'term_717253ef-...'), nunca una descripción.
+        El resultado trae `ok: true` solo si de verdad se cerró."""
         return await cliente.llamar(
             "cerrar_terminal", {"terminal": terminal, "confirmacion_id": confirmacion_id}
         )
@@ -74,7 +86,11 @@ def construir_servidor(cliente: ClienteCanalLocal) -> MCPServer:
     @servidor.tool()
     async def eliminar_worktree(worktree: str, confirmacion_id: str) -> dict:
         """Elimina un worktree de Orca. Exige un confirmacion_id válido
-        para la acción 'eliminar_worktree'."""
+        para la acción 'eliminar_worktree'.
+
+        `worktree` MUST ser el identificador exacto de `orca worktree
+        list`/`repo list`, nunca una descripción. El resultado trae
+        `ok: true` solo si de verdad se eliminó."""
         return await cliente.llamar(
             "eliminar_worktree", {"worktree": worktree, "confirmacion_id": confirmacion_id}
         )

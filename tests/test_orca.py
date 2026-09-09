@@ -125,6 +125,20 @@ async def test_crear_worktree_con_base_branch():
 
 
 @pytest.mark.asyncio
+async def test_cerrar_terminal_arma_el_comando_correcto():
+    orca, llamadas = _orca_con_ejecutor()
+    await orca.cerrar_terminal("term_abc123")
+    assert llamadas == [["terminal", "close", "--terminal", "term_abc123", "--json"]]
+
+
+@pytest.mark.asyncio
+async def test_eliminar_worktree_arma_el_comando_correcto():
+    orca, llamadas = _orca_con_ejecutor()
+    await orca.eliminar_worktree("path:/repo/worktree")
+    assert llamadas == [["worktree", "rm", "--worktree", "path:/repo/worktree", "--json"]]
+
+
+@pytest.mark.asyncio
 async def test_resultado_se_parsea_como_json():
     orca, _ = _orca_con_ejecutor(respuestas={"result": {"handle": "term_abc"}})
     resultado = await orca.mostrar_terminal("term_abc")

@@ -79,3 +79,50 @@ def test_sin_interrupcion_reproduce_todos_los_bloques_en_orden():
 
     assert len(bloques) == 1
     assert list(bloques[0]) == [0, 1, 2, 3]
+
+
+def test_esperar_vacia_no_vuelve_antes_de_que_termine_de_sonar():
+    """Antes `escuchar()` arrancaba apenas se encolaba el audio, no cuando
+    terminaba de sonar: el micrófono captaba la propia pregunta de Loki y
+    la transcribía como respuesta del usuario (hardware real, tarea 10.3,
+    C2/C3)."""
+    bloques: list = []
+
+    def decodificador(mp3: bytes):
+        return _decodificado_falso(n_muestras=20)
+
+    def fabrica_stream(samplerate, canales):
+        return _StreamFalso(bloques)
+
+    reproductor = Reproductor(decodificador=decodificador, fabrica_stream=fabrica_stream, tam_bloque=1)
+    reproductor.iniciar()
+    reproductor.encolar(b"audio-1")
+
+    reproductor.esperar_vacia()
+
+    assert len(bloques) == 20
+
+
+def test_esperar_vacia_no_se_cuelga_tras_interrumpir():
+    bloques: list = []
+    evento_primer_bloque = threading.Event()
+
+    def decodificador(mp3: bytes):
+        return _decodificado_falso(n_muestras=100)
+
+    def fabrica_stream(samplerate, canales):
+        return _StreamFalso(bloques, evento_primer_bloque)
+
+    reproductor = Reproductor(decodificador=decodificador, fabrica_stream=fabrica_stream, tam_bloque=1)
+    reproductor.iniciar()
+    reproductor.encolar(b"audio-1")
+    reproductor.encolar(b"audio-2")
+
+    assert evento_primer_bloque.wait(timeout=2), "el primer bloque no se reprodujo a tiempo"
+    reproductor.interrumpir()
+
+    hilo_espera = threading.Thread(target=reproductor.esperar_vacia)
+    hilo_espera.start()
+    hilo_espera.join(timeout=2)
+
+    assert not hilo_espera.is_alive(), "esperar_vacia() se colgó tras interrumpir()"

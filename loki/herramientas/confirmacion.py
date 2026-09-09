@@ -7,11 +7,14 @@ ejecuta, sin importar lo que el cerebro afirme.
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Awaitable, Callable
+
+logger = logging.getLogger(__name__)
 
 ESPERA_RESPUESTA_S = 10.0
 VALIDEZ_S = 60.0
@@ -118,8 +121,11 @@ async def pedir_confirmacion(
     activación) y clasifica sí/no/ambigua. Devuelve el id de confirmación;
     solo queda válido si el usuario confirmó a tiempo."""
     id_confirmacion = registro.crear(accion, objetivo)
+    logger.info("pedir_confirmacion: creada id=%s accion=%s objetivo=%s", id_confirmacion, accion, objetivo)
     await hablar(f"¿Confirmás {accion} en {objetivo}?")
+    logger.info("pedir_confirmacion: pregunta hablada, escuchando id=%s", id_confirmacion)
     texto = await escuchar(ESPERA_RESPUESTA_S)
+    logger.info("pedir_confirmacion: escuchar devolvió %r para id=%s", texto, id_confirmacion)
 
     if texto is None:
         registro.cancelar(id_confirmacion)
@@ -127,6 +133,7 @@ async def pedir_confirmacion(
         return id_confirmacion
 
     clasificacion = clasificar_respuesta(texto)
+    logger.info("pedir_confirmacion: clasificación=%s para id=%s", clasificacion, id_confirmacion)
     if clasificacion == Clasificacion.CONFIRMA:
         registro.confirmar(id_confirmacion)
         await hablar("Listo, lo hago.")

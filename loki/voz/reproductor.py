@@ -6,9 +6,13 @@ cortar la reproducción a mitad de una oración cuando el usuario interrumpe.
 """
 from __future__ import annotations
 
+import logging
 import queue
 import threading
+import time
 from typing import Callable, ContextManager, Protocol
+
+logger = logging.getLogger(__name__)
 
 import miniaudio
 import numpy as np
@@ -63,18 +67,31 @@ class Reproductor:
                 self._cola.get_nowait()
             except queue.Empty:
                 break
+            else:
+                self._cola.task_done()  # si no, esperar_vacia() se cuelga para siempre
 
     def detener(self) -> None:
         self._cola.put(self._FIN)
         self._hilo.join()
 
+    def esperar_vacia(self) -> None:
+        """Bloquea (en el hilo que llama, pensado para un executor) hasta
+        que termine de reproducirse -o se corte por `interrumpir()`- todo
+        lo encolado hasta este punto. Usa el conteo de tareas propio de
+        `queue.Queue`, así que no importa si se encola algo más mientras
+        se espera: no es una condición de carrera como sería con un
+        simple flag "inactivo"."""
+        self._cola.join()
+
     def _bucle(self) -> None:
         while True:
             item = self._cola.get()
             if item is self._FIN:
+                self._cola.task_done()
                 return
             self._evento_interrumpir.clear()
             self._reproducir(item)  # type: ignore[arg-type]
+            self._cola.task_done()
 
     def _reproducir(self, mp3: bytes) -> None:
         decodificado = self._decodificador(mp3)
@@ -82,7 +99,9 @@ class Reproductor:
             -1, decodificado.nchannels
         )
         with self._fabrica_stream(decodificado.sample_rate, decodificado.nchannels) as stream:
-            for inicio in range(0, len(muestras), self._tam_bloque):
+            for i, inicio in enumerate(range(0, len(muestras), self._tam_bloque)):
                 if self._evento_interrumpir.is_set():
                     return
+                if i == 0:
+                    logger.info("Reproductor: empezó a sonar en t=%.2f", time.monotonic())
                 stream.write(muestras[inicio : inicio + self._tam_bloque])

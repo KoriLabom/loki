@@ -12,9 +12,11 @@ hilos internamente.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import sys
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -42,7 +44,7 @@ from loki.herramientas.coordinador_media import CoordinadorMedia
 from loki.herramientas.manejadores_canal_local import ManejadoresCriticos
 from loki.herramientas.media import ControlMedia
 from loki.herramientas.monitor import MonitorTerminal
-from loki.herramientas.orca import Orca
+from loki.herramientas.orca import ErrorOrca, Orca
 from loki.ui.bandeja import Bandeja
 from loki.ui.paleta import icono_bandeja
 from loki.ui.overlay import Overlay
@@ -84,6 +86,14 @@ class Loki:
         self.maquina.observar(lambda a, n: self.senales.cambio_estado.emit(a, n))
 
         self._segmentador = SegmentadorOraciones()
+        # Cola FIFO de oraciones por hablar: cada una se sintetiza y se
+        # encola en el reproductor en orden estricto. Antes cada oración
+        # disparaba su propia tarea concurrente independiente
+        # (`asyncio.run_coroutine_threadsafe` por oración), así que la
+        # que ganaba la carrera de red de edge-tts se escuchaba primero
+        # sin importar el orden de generación (hardware real, tarea
+        # 10.3, V2: viola "orden preservado" de la spec voz-de-salida).
+        self._cola_habla: asyncio.Queue = asyncio.Queue()
         self._monitores_activos: set[str] = set()
         self._hilo_asyncio: threading.Thread | None = None
         self._loop_asyncio: asyncio.AbstractEventLoop | None = None
@@ -93,6 +103,16 @@ class Loki:
         self._buffer_frase: list[np.ndarray] = []
         self._generacion_actual = 0
         self._generacion_turno_en_curso = 0
+        self._primera_oracion_pendiente = False
+
+        # Escucha de confirmación (sin wake word, spec
+        # confirmacion-de-acciones-criticas): estado independiente del
+        # ciclo normal de dictado, alimentado por el mismo callback de
+        # audio.
+        self._escuchando_confirmacion = False
+        self._buffer_confirmacion: list[np.ndarray] = []
+        self._detector_fin_de_frase_confirmacion: DetectorFinDeFrase | None = None
+        self._futuro_confirmacion: concurrent.futures.Future | None = None
 
         persona = RAIZ / "loki" / "persona" / "system_prompt.md"
         config_cerebro = config_cerebro_desde_config(self.config, ruta_persona=persona, cwd=RAIZ)
@@ -137,26 +157,29 @@ class Loki:
         return asyncio.run_coroutine_threadsafe(coro, self._loop_asyncio).result(timeout=30)
 
     def _ejecutar_cerrar_terminal(self, terminal: str):
-        # Cerrar una terminal es una acción real de Orca, no expuesta por
-        # Orca() como método propio todavía: se ejecuta vía CLI directo.
         async def _cerrar():
-            proc = await asyncio.create_subprocess_exec(
-                "orca", "terminal", "close", "--terminal", terminal, "--json",
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-            return {"terminal": terminal}
+            try:
+                await self.orca.cerrar_terminal(terminal)
+                return {"terminal": terminal, "ok": True}
+            except ErrorOrca as exc:
+                # Encontrado con hardware real (tarea 10.3, C2): antes se
+                # ignoraba el resultado del subproceso y se afirmaba éxito
+                # sin importar si `orca terminal close` realmente cerró
+                # algo (por ejemplo con un `terminal` que no es un handle
+                # válido de Orca).
+                logger.warning("orca terminal close falló para %s: %s", terminal, exc)
+                return {"terminal": terminal, "ok": False, "error": str(exc)}
 
         return _cerrar()
 
     def _ejecutar_eliminar_worktree(self, worktree: str):
         async def _eliminar():
-            proc = await asyncio.create_subprocess_exec(
-                "orca", "worktree", "rm", "--worktree", worktree, "--json",
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-            return {"worktree": worktree}
+            try:
+                await self.orca.eliminar_worktree(worktree)
+                return {"worktree": worktree, "ok": True}
+            except ErrorOrca as exc:
+                logger.warning("orca worktree rm falló para %s: %s", worktree, exc)
+                return {"worktree": worktree, "ok": False, "error": str(exc)}
 
         return _eliminar()
 
@@ -182,21 +205,78 @@ class Loki:
     def _manejar_pedir_confirmacion(self, datos: dict) -> dict:
         from loki.herramientas.confirmacion import pedir_confirmacion
 
+        logger.info("_manejar_pedir_confirmacion: datos=%s estado=%s", datos, self.maquina.estado)
+
         async def _pedir():
             async def hablar(texto: str) -> None:
                 await self._hablar(texto)
+                # Sin esto, `escuchar()` empieza a grabar apenas se
+                # encola el audio (no cuando termina de sonar): el micro
+                # capta la propia pregunta de Loki y la transcribe como
+                # si fuera la respuesta del usuario (encontrado con
+                # hardware real, tarea 10.3, C2/C3).
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self.reproductor.esperar_vacia)
 
             async def escuchar(espera_s: float) -> str | None:
-                # TODO: implementar escucha real sin wake word (requiere el
-                # hilo de audio en modo "confirmación"); de momento no hay
-                # forma de escuchar fuera del ciclo normal de wake word.
-                return None
+                return await self._escuchar_para_confirmacion(espera_s)
 
             return await pedir_confirmacion(
                 self.registro_confirmaciones, datos.get("accion", ""), datos.get("objetivo", ""), hablar, escuchar
             )
 
-        return self._correr_en_asyncio(_pedir())
+        resultado = self._correr_en_asyncio(_pedir())
+        logger.info("_manejar_pedir_confirmacion: resultado=%s", resultado)
+        return resultado
+
+    async def _escuchar_para_confirmacion(self, espera_s: float) -> str | None:
+        """Escucha una respuesta sin requerir la palabra de activación
+        (spec confirmacion-de-acciones-criticas). Corre en paralelo al
+        ciclo normal de dictado: usa su propio `DetectorFinDeFrase`,
+        alimentado por `_on_bloque_audio` desde el hilo de audio, y un
+        `concurrent.futures.Future` para volver de forma segura al loop
+        de asyncio (mismo patrón que `CoordinadorMedia`, ver D11)."""
+        fin_frase_cfg = self.config.get("audio", {}).get("fin_de_frase", {})
+        self._buffer_confirmacion = []
+        self._detector_fin_de_frase_confirmacion = DetectorFinDeFrase(
+            umbral_rms=fin_frase_cfg.get("umbral_rms", 0.02),
+            silencio_s=fin_frase_cfg.get("silencio_s", 1.2),
+            sin_voz_s=espera_s,
+            maximo_s=espera_s + 3,
+        )
+        futuro: concurrent.futures.Future = concurrent.futures.Future()
+        self._futuro_confirmacion = futuro
+        self._escuchando_confirmacion = True
+        logger.info("_escuchar_para_confirmacion: arrancó, espera_s=%s estado=%s", espera_s, self.maquina.estado)
+        try:
+            audio = await asyncio.wait_for(asyncio.wrap_future(futuro), timeout=espera_s + 3)
+        except asyncio.TimeoutError:
+            logger.info("_escuchar_para_confirmacion: timeout esperando el futuro")
+            audio = None
+        finally:
+            self._escuchando_confirmacion = False
+            self._detector_fin_de_frase_confirmacion = None
+            self._futuro_confirmacion = None
+            self._buffer_confirmacion = []
+
+        if audio is None or len(audio) == 0:
+            logger.info("_escuchar_para_confirmacion: sin audio para transcribir")
+            return None
+
+        loop = asyncio.get_event_loop()
+        tasa = self._grabador.tasa_efectiva if self._grabador else 16000
+        texto = await loop.run_in_executor(None, self.transcriber.transcribe, audio, tasa)
+        logger.info("_escuchar_para_confirmacion: transcripción=%r", texto)
+        return texto or None
+
+    def _terminar_escucha_confirmacion(self, resultado: ResultadoBloque) -> None:
+        audio = np.concatenate(self._buffer_confirmacion) if self._buffer_confirmacion else np.array([], dtype="float32")
+        logger.info("_terminar_escucha_confirmacion: resultado=%s bloques=%d", resultado, len(audio))
+        self._buffer_confirmacion = []
+        futuro, self._futuro_confirmacion = self._futuro_confirmacion, None
+        if futuro is not None and not futuro.done():
+            vacio = resultado == ResultadoBloque.SIN_VOZ
+            futuro.set_result(None if vacio else audio)
 
     def _manejar_overlay_estado(self, datos: dict) -> dict:
         self.senales.respuesta.emit(datos.get("texto", ""))
@@ -277,8 +357,27 @@ class Loki:
         oraciones = self._segmentador.agregar(texto_delta)
         for oracion in oraciones:
             generacion = self._generacion_actual
-            if self._loop_asyncio is not None:
-                asyncio.run_coroutine_threadsafe(self._hablar(oracion, generacion), self._loop_asyncio)
+            logger.info("_on_texto_parcial_cerebro: oración lista en t=%.2f: %r", time.monotonic(), oracion)
+            if self._primera_oracion_pendiente:
+                # Antes esta transición se disparaba en `_procesar_turno`
+                # apenas arrancaba el turno, no cuando había una oración
+                # real: el overlay pasaba a "hablando" segundos antes de
+                # que sonara nada (hardware real, tarea 10.3).
+                self._primera_oracion_pendiente = False
+                self.maquina.primera_oracion_lista()
+            self._cola_habla.put_nowait((oracion, generacion))
+
+    async def _consumir_cola_habla(self) -> None:
+        """Único consumidor de `_cola_habla`: sintetiza y encola las
+        oraciones de a una, en el orden en que se generaron."""
+        while True:
+            oracion, generacion = await self._cola_habla.get()
+            try:
+                await self._hablar(oracion, generacion)
+            except Exception:
+                logger.exception("Fallo hablando la oración: %r", oracion)
+            finally:
+                self._cola_habla.task_done()
 
     async def _hablar(self, texto: str, generacion: int | None = None) -> None:
         if generacion is not None and generacion != self._generacion_actual:
@@ -287,6 +386,7 @@ class Loki:
         if not limpio:
             return
 
+        t0 = time.monotonic()
         await hablar_oraciones(
             oraciones=[limpio],
             texto_completo=texto,
@@ -294,6 +394,7 @@ class Loki:
             reproductor=self.reproductor,
             on_fallo_sintesis=lambda t: self.senales.respuesta.emit(t),
         )
+        logger.info("_hablar: sintetizada y encolada en %.2fs: %r", time.monotonic() - t0, limpio)
 
     # --- Turno de conversación ------------------------------------------
 
@@ -302,15 +403,23 @@ class Loki:
         self.maquina.fin_de_voz()
         self._generacion_turno_en_curso = self._generacion_actual
         mi_generacion = self._generacion_actual
+        self._primera_oracion_pendiente = True
         try:
             if self.registro_sesiones.relay_activa is not None:
                 sesion = self.registro_sesiones.sesion_relay
                 self.maquina.agente_empezo_a_trabajar(sesion.handle if sesion else "relay")
-            self.maquina.primera_oracion_lista()
             respuesta = await self.cerebro.enviar_turno(texto_usuario)
             resto = self._segmentador.flush()
+            if self._primera_oracion_pendiente:
+                # La respuesta no tuvo ninguna oración con puntuación
+                # final antes de este punto (o no tuvo texto en absoluto):
+                # sin este resguardo el estado se quedaría en "pensando"
+                # para siempre (fin_de_reproduccion sólo transiciona
+                # desde "hablando").
+                self._primera_oracion_pendiente = False
+                self.maquina.primera_oracion_lista()
             if resto:
-                await self._hablar(resto, mi_generacion)
+                self._cola_habla.put_nowait((resto, mi_generacion))
             self.senales.respuesta.emit(respuesta)
         finally:
             self.maquina.fin_de_reproduccion()
@@ -324,9 +433,17 @@ class Loki:
             bloque_int16 = np.clip(bloque * 32767, -32768, 32767).astype(np.int16).flatten()
             self._detector_wake_word.procesar_bloque(bloque_int16)
 
+        duracion_bloque_s = len(bloque) / self._grabador.tasa_efectiva if self._grabador else 0.0
+
+        if self._escuchando_confirmacion and self._detector_fin_de_frase_confirmacion is not None:
+            self._buffer_confirmacion.append(bloque.copy())
+            resultado = self._detector_fin_de_frase_confirmacion.procesar_bloque(bloque, duracion_bloque_s)
+            if resultado != ResultadoBloque.CONTINUAR:
+                self._terminar_escucha_confirmacion(resultado)
+            return  # mientras se escucha una confirmación no se alimenta el dictado normal
+
         if self.maquina.estado == Estado.ESCUCHANDO and self._detector_fin_de_frase is not None:
             self._buffer_frase.append(bloque.copy())
-            duracion_bloque_s = len(bloque) / self._grabador.tasa_efectiva if self._grabador else 0.0
             resultado = self._detector_fin_de_frase.procesar_bloque(bloque, duracion_bloque_s)
             if resultado == ResultadoBloque.SIN_VOZ:
                 self._buffer_frase = []
@@ -415,6 +532,7 @@ class Loki:
         os.environ[VARIABLE_ENTORNO_TOKEN] = self._token_canal_local
         self.canal_local.iniciar()
         self.reproductor.iniciar()
+        asyncio.run_coroutine_threadsafe(self._consumir_cola_habla(), self._loop_asyncio)
 
         asyncio.run_coroutine_threadsafe(self.cerebro.iniciar(), self._loop_asyncio).result(timeout=30)
 
@@ -442,7 +560,23 @@ def main() -> None:
 
     loki = Loki()
     loki.iniciar_asyncio()
-    overlay = Overlay()
+
+    ruta_config_local = RAIZ / "config.local.yaml"
+
+    def _al_mover_overlay(x: int, y: int) -> None:
+        guardar_posicion(ruta_config_local, x, y)
+
+    overlay = Overlay(on_posicion_cambiada=_al_mover_overlay)
+
+    monitores = monitores_reales()
+    principal = monitores[0] if monitores else None
+    if principal is not None:
+        defecto = (
+            principal.x + max(0, (principal.width - overlay.width()) // 2),
+            principal.y + principal.height - overlay.height() - 40,
+        )
+        x, y = resolver_posicion(loki.config.get("overlay", {}).get("posicion"), monitores, defecto)
+        overlay.move(x, y)
 
     def _al_cambiar_estado(anterior, nuevo) -> None:
         metodo = {

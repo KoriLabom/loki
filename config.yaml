@@ -18,7 +18,7 @@ audio:
     modelo: modelos/hey_jarvis.onnx
     umbral: 0.5
   fin_de_frase:
-    umbral_rms: 0.02
+    umbral_rms: 0.004
     silencio_s: 1.2
     sin_voz_s: 5
     maximo_s: 30
