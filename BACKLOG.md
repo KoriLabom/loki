@@ -22,7 +22,7 @@ Lo que entra a construirse pasa a un change de OpenSpec en `openspec/changes/`. 
 - **Elección de modelo en Orca**: `worktree create --agent` no acepta modelo. Se crea el worktree sin agente y se lanza `terminal create --command "claude --model <m>"`.
 - **Activación**: wake word desde el MVP, no push-to-talk. Fin de frase por detección de silencio.
 - **STT**: Groq Whisper large-v3, reutilizando el transcriptor de voice-transcript. La GPU local (NVIDIA T500, 4GB) es floja para Whisper local.
-- **Base de código de voz**: los módulos útiles de `C:\Users\malabombarda\voice-transcript` (grabador, transcriptor, vocabulario, overlay) se copian y adaptan dentro de este repo. No se depende del otro repo.
+- **Base de código de voz**: los módulos útiles del repo `voice-transcript` del mismo autor (grabador, transcriptor, vocabulario, overlay) se copian y adaptan dentro de este repo. No se depende del otro repo.
 - **Flujo de codear por voz**: explore -> propose -> apply. El explore lo hace una sesión de Claude Code con `/opsx:explore` en el repo destino; Loki es relay de voz bidireccional con esa terminal. Nunca un propose directo sin explore previo.
 - **Modelos por etapa**:
   - Explore y propose: el más potente disponible (hoy `claude-fable-5-1`).
