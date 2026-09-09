@@ -1,0 +1,18 @@
+# Entorno
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Privado: nunca se sube
+.env
+config.local.yaml
+config.local.yml
+*.log
+overlay_position.json
+
+# Locales de Claude Code
+.claude/settings.local.json
