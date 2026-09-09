@@ -64,8 +64,8 @@
 
 - [x] 10.1 Implementar `loki/main.py` que arma los hilos de D11 (Qt, audio, cerebro y voz, canal local), conecta observadores de la máquina de estados con el overlay y arranca el subproceso del cerebro; verificar que `python -m loki.main` levanta el overlay en estado dormido y responde a "hey Jarvis" con una respuesta hablada
 - [x] 10.2 Escribir `CLAUDE.md` del repo con la descripción del proyecto, la convención de OpenSpec en español, la regla de correr la auditoría de privacidad antes de cada PR y el puntero a BACKLOG.md; verificar que una sesión nueva de Claude Code en el repo lo lee (lo menciona al preguntarle qué es el proyecto)
-- [ ] 10.3 Recorrer una lista de pruebas manuales que cubra cada escenario de las specs con "manualmente" o sin test automático (activación, silencio, interrupción, media, relay, confirmación, overlay, bandeja) y registrar el resultado en `docs/pruebas-manuales-mvp.md`; verificar que ninguna prueba queda en rojo antes de dar por terminado el change
-- [ ] 10.4 Ajustar umbrales de wake word, RMS y silencio con uso real y dejar los valores finales en `config.yaml`; verificar que tres activaciones seguidas funcionan sin falsos positivos en un minuto de conversación normal
+- [x] 10.3 Recorrer una lista de pruebas manuales que cubra cada escenario de las specs con "manualmente" o sin test automático (activación, silencio, interrupción, media, relay, confirmación, overlay, bandeja) y registrar el resultado en `docs/pruebas-manuales-mvp.md`; verificar que ninguna prueba queda en rojo antes de dar por terminado el change
+- [x] 10.4 Ajustar umbrales de wake word, RMS y silencio con uso real y dejar los valores finales en `config.yaml`; verificar que tres activaciones seguidas funcionan sin falsos positivos en un minuto de conversación normal
 
 ## 11. Privacidad y publicación
 

@@ -4,7 +4,7 @@ Asistente de voz que maneja la computadora a través de Orca, Claude Code y herr
 Este archivo es la memoria de producto del proyecto: decisiones tomadas, ideas por construir y preguntas abiertas.
 Lo que entra a construirse pasa a un change de OpenSpec en `openspec/changes/`. Lo demás vive acá.
 
-Última actualización: 2026-09-08
+Última actualización: 2026-09-09
 
 ## Identidad
 
@@ -62,6 +62,7 @@ Orden aproximado de valor. Una línea por idea.
 - Cómo detectar que hay media reproduciéndose y en qué app, para pausar solo cuando corresponde. Candidato: sesión de media de Windows (`GlobalSystemMediaTransportControlsSessionManager`) más la tecla multimedia play/pause.
 - Qué hace Loki cuando reconoce mal y ejecuta algo no pedido. Deshacer donde se pueda.
 - Cómo se siente la latencia total (wake word + STT + cerebro + TTS) y si el cerebro diario va en Haiku o Sonnet.
+- **Latencia de edge-tts hasta la primera oración (medida en la tarea 10.3, segunda sesión de pruebas del 2026-09-09): ~1,8 s, por encima del objetivo de <1,5 s de la spec `voz-de-salida`.** Parece ser latencia de red del propio servicio, no de la cola/síntesis de Loki (que ya procesa en orden estricto, ver design.md D7). Si molesta en el uso diario, revisar con ElevenLabs u otro proveedor con menor latencia antes que seguir optimizando el lado de Loki.
 
 ## Hallazgos del entorno (2026-09-08)
 

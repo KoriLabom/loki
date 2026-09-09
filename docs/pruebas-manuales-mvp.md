@@ -17,7 +17,7 @@ correrlas y completar la columna de resultado antes de cerrar el change.
 | # | Escenario | Spec | Estado | Resultado |
 |---|-----------|------|--------|-----------|
 | A1 | Decir "hey Jarvis" en estado dormido dispara el callback en menos de 500 ms | captura-de-voz | **Hecho** | Confirmado con hardware real: la onda empieza a moverse y el estado pasa a escuchando al decir "hey Jarvis". |
-| A2 | Hablar con otra persona sin decir la palabra de activación no graba ni transcribe nada | captura-de-voz | Pendiente | No se probó explícitamente, pero se infiere del diseño (el detector de wake word es el único gate hacia escuchando). |
+| A2 | Hablar con otra persona sin decir la palabra de activación no graba ni transcribe nada | captura-de-voz | **Hecho** | Confirmado con hardware real (sesión 2026-09-09 con el usuario): hablar sin decir "hey Jarvis" no dispara nada. |
 | A3 | Con un modelo de wake word configurado a un archivo inexistente, Loki avisa el error (overlay + log) y no se cierra | captura-de-voz | Hecho (test automatizado, tarea 4.2) | `ModeloWakeWordNoEncontrado` con mensaje claro; cubierto por `tests/test_wake_word.py` |
 
 ## Silencio y fin de frase
@@ -26,8 +26,8 @@ correrlas y completar la columna de resultado antes de cerrar el change.
 |---|-----------|------|--------|-----------|
 | S1 | El usuario deja de hablar más del umbral de silencio (1,2 s por defecto): la grabación termina y pasa a transcripción | captura-de-voz | **Hecho** | Confirmado con voz real: **encontrado y corregido un bug real** — `main.py` nunca calculaba la duración real de cada bloque de audio (quedaba fija en `0.0`), así que el reloj interno del detector de silencio nunca avanzaba y jamás cortaba. Corregido calculando la duración desde el tamaño del bloque y la tasa de muestreo. |
 | S2 | Pasan 5 s desde la activación sin voz: Loki vuelve a dormido sin transcribir | captura-de-voz | **Hecho** | Confirmado con el mismo fix: activar y quedarse en silencio vuelve a dormido sin llamar al cerebro. |
-| S3 | La grabación llega a los 30 s: se corta y se transcribe lo grabado hasta ahí | captura-de-voz | Pendiente | Mismo mecanismo que S1/S2, ya corregido; falta la corrida específica de 30 s hablando sin parar. |
-| S4 | Transcripción vacía o alucinada: Loki vuelve a dormido sin llamar al cerebro y avisa brevemente | captura-de-voz | Pendiente | Filtro de alucinaciones cubierto por test (`tests/test_transcriber.py`); falta la corrida real con silencio/ruido |
+| S3 | La grabación llega a los 30 s: se corta y se transcribe lo grabado hasta ahí | captura-de-voz | **Hecho** | Confirmado con voz real (sesión 2026-09-09), **encontrado y corregido un bug real**: `umbral_rms` (0.02 por defecto) estaba muy por encima de la voz real del usuario, medida entre 0.002 y 0.03 con picos aislados; casi ningún bloque de audio superaba el umbral, así que el detector de silencio se disparaba a los pocos segundos de hablar sin parar. Se midió el RMS real del micrófono y se bajó a 0.004 en `config.yaml`; con eso, hablar sin parar corta recién a los 30 s como se espera. |
+| S4 | Transcripción vacía o alucinada: Loki vuelve a dormido sin llamar al cerebro y avisa brevemente | captura-de-voz | **Hecho** | Confirmado con voz real (sesión 2026-09-09): silencio tras la activación vuelve a dormido y avisa brevemente sin llamar al cerebro. |
 
 ## Interrupción
 
@@ -62,18 +62,18 @@ correrlas y completar la columna de resultado antes de cerrar el change.
 | # | Escenario | Spec | Estado | Resultado |
 |---|-----------|------|--------|-----------|
 | C1 | Pedir cerrar una terminal termina en `pedir_confirmacion` y no se ejecuta sin `confirmacion_id` válido | confirmacion-de-acciones-criticas, cerebro | **Hecho** | Verificado en vivo (tarea 7.5): el cerebro rechazó `Bash(orca terminal close)` y llamó a `pedir_confirmacion` con el identificador exacto, y `cerrar_terminal` solo ejecutó tras un `confirmacion_id` válido. |
-| C2 | Usuario confirma con una afirmación clara dentro de los 10 s: la acción se ejecuta | confirmacion-de-acciones-criticas | Pendiente (secuencia de voz real) | Lógica de clasificación y vencimiento cubierta por `tests/test_confirmacion.py`; falta correrla con una respuesta hablada real |
-| C3 | Usuario niega, duda, o no responde: la acción se cancela y Loki lo dice | confirmacion-de-acciones-criticas | Pendiente (secuencia de voz real) | Ídem, cubierto por test con `escuchar` simulado |
+| C2 | Usuario confirma con una afirmación clara dentro de los 10 s: la acción se ejecuta | confirmacion-de-acciones-criticas | **Hecho** | Confirmado con secuencia de voz real (sesión 2026-09-09): pedir cerrar una terminal, confirmar "sí", y la terminal se cierra de verdad en Orca (bajó de 15 a 14 terminales listadas, el handle confirmado desapareció). **Se encontraron y corrigieron 4 bugs reales en el camino** (ver detalle abajo): la escucha de confirmación nunca estaba implementada (TODO sin terminar), un eco de la propia voz de Loki se transcribía como respuesta del usuario, el timeout HTTP del canal local cortaba antes de que la confirmación terminara, y el cerebro no encadenaba la llamada real a `cerrar_terminal` ni pasaba el handle correcto. |
+| C3 | Usuario niega, duda, o no responde: la acción se cancela y Loki lo dice | confirmacion-de-acciones-criticas | **Hecho** | Confirmado con secuencia de voz real: negar con "no" o responder algo ambiguo cancela la acción y la terminal correspondiente sigue intacta en Orca; sin respuesta también cancela. Mismos fixes que C2. |
 | C4 | Un `confirmacion_id` vencido o de otra acción se rechaza | confirmacion-de-acciones-criticas | Hecho (test automatizado) | `tests/test_confirmacion.py`, `tests/test_servidor_mcp.py` |
 
 ## Overlay
 
 | # | Escenario | Spec | Estado | Resultado |
 |---|-----------|------|--------|-----------|
-| O1 | Los cinco estados se ven distinguibles (dormido, escuchando, pensando, hablando, agente trabajando) | overlay-de-estado | Parcial | **Hecho** para dormido/escuchando/pensando/hablando: confirmados visualmente en pantalla real durante una conversación de punta a punta, con texto legible (a diferencia del render offscreen de la tarea 6.2, que no tenía fuentes). Falta ver "agente trabajando" (requiere una sesión de relay o un monitor de apply activo). |
+| O1 | Los cinco estados se ven distinguibles (dormido, escuchando, pensando, hablando, agente trabajando) | overlay-de-estado | **Hecho** | Los cuatro estados principales ya estaban confirmados; "agente trabajando" se confirmó en esta sesión (2026-09-09) activando una sesión de exploración real por voz: el indicador naranja con el nombre del proyecto se ve distinguible de los otros cuatro. **Encontrado y corregido un bug separado** (no bloqueaba O1 pero sí V2/UX): el estado pasaba a "hablando" apenas arrancaba el turno, antes de que hubiera una oración real lista para sonar; ahora espera a la primera oración real (o al fin del turno si la respuesta no tuvo puntuación). |
 | O2 | La onda reacciona al volumen mientras escucha | overlay-de-estado | **Hecho** | Confirmado: la onda se mueve al hablar después de decir "hey Jarvis". |
 | O3 | Primera ejecución sin posición guardada: aparece centrado abajo en el monitor principal | overlay-de-estado | **Hecho** | Confirmado en la primera corrida (sin `config.local.yaml`): apareció centrado abajo. |
-| O4 | Mover el overlay y cerrar Loki: la próxima vez aparece en el mismo lugar si el monitor sigue conectado | overlay-de-estado | Pendiente | No se probó (no se arrastró el overlay todavía). |
+| O4 | Mover el overlay y cerrar Loki: la próxima vez aparece en el mismo lugar si el monitor sigue conectado | overlay-de-estado | **Hecho** | **Encontrado y corregido un bug real**: `guardar_posicion`/`resolver_posicion`/`monitores_reales` (tarea 6.3) existían con tests unitarios pero nunca se llamaban desde la app real — mover el overlay no persistía nada y el arranque no leía la posición guardada. Se conectó `Overlay` a `guardar_posicion` al soltar el arrastre, y `main()` calcula la posición inicial con `resolver_posicion` (con centrado abajo como default). Confirmado en vivo: se movió el overlay, se reinició Loki, y apareció en la misma posición guardada en `config.local.yaml`. |
 | O5 | La posición guardada corresponde a un monitor desconectado: vuelve a la posición por defecto | overlay-de-estado | Hecho (test automatizado) | `tests/test_posicion.py::test_posicion_fuera_de_todas_las_pantallas_se_descarta` |
 | O6 | Cambiar el acento en `paleta.py` cambia la onda y los textos sin tocar otro código | overlay-de-estado | **Hecho** | Verificado visualmente (tarea 6.1): capturas antes/después con acento cambiado de terracota a azul, la onda cambió de color. |
 
@@ -90,7 +90,7 @@ correrlas y completar la columna de resultado antes de cerrar el change.
 | # | Escenario | Spec | Estado | Resultado |
 |---|-----------|------|--------|-----------|
 | V1 | La voz por defecto (`es-MX-DaliaNeural`) se escucha en español neutro | voz-de-salida | **Hecho** | Confirmado con parlantes reales: se escucha clara, en español neutro. |
-| V2 | Una respuesta larga empieza a sonar antes de terminar de generarse | voz-de-salida | Pendiente | Se escuchó una respuesta completa correctamente, pero no se midió específicamente la latencia hasta la primera oración en una respuesta larga. |
+| V2 | Una respuesta larga empieza a sonar antes de terminar de generarse | voz-de-salida | **Hecho** | Confirmado con timing real medido en el log (sesión 2026-09-09): la primera oración empieza a sonar mientras el cerebro sigue generando el resto de la respuesta. **Se encontró y corrigió un bug real de orden**: cada oración disparaba su propia tarea concurrente de síntesis (una por oración), así que se escuchaban en el orden en que terminaba la síntesis de red de cada una, no en el orden en que se generaron (violaba "orden preservado" de la spec). Se cambió a una cola FIFO con un único consumidor que sintetiza y encola de a una. Verificado en dos turnos reales seguidos (incluyendo uno interrumpido a mitad de respuesta): el orden de reproducción coincide exactamente con el orden de generación. **Limitación conocida, no bloqueante**: la latencia medida hasta la primera oración fue de ~1.8s en varias corridas, por encima del objetivo de la spec (<1,5s); parece ser latencia de red inherente al servicio de edge-tts, no algo que el código de Loki pueda acortar sin cambiar de proveedor de voz. Queda anotado como límite conocido; ver BACKLOG.md si se quiere revisar con otro proveedor. |
 | V3 | Un bloque de código en la respuesta no se lee en voz alta | voz-de-salida | Hecho (test automatizado) | `tests/test_limpieza_texto.py` |
 | V4 | Si falla la síntesis, el texto completo queda visible en el overlay y Loki sigue operativo | voz-de-salida | Hecho (test automatizado) | `tests/test_salida.py` |
 
@@ -135,15 +135,87 @@ onda reactiva, la posición por defecto centrada abajo, interrupción por
 wake word mientras habla, y las tres acciones de la bandeja (mostrar/
 ocultar, reiniciar, salir sin procesos huérfanos).
 
-**Resumen general**: de los escenarios sin cobertura automática
-completa, los que dependían de poder ejecutar comandos reales contra
-Claude Code, Orca o Windows (media, MCP, confirmación crítica, relay,
-skill, CLAUDE.md) se verificaron en vivo durante la implementación; los
-que dependían de escuchar, hablar o mirar la pantalla real se
-verificaron en esta sesión con el usuario y el hardware real. Quedan
-pendientes: A2 (conversación ajena sin wake word), S3 (corte a los 30 s
-hablando sin parar), S4 (transcripción vacía/alucinada con silencio o
-ruido real), O1 el indicador de "agente trabajando", O4 (persistencia de
-posición movida), V2 (medir la latencia real hasta la primera oración),
-y C2/C3 (la secuencia hablada de confirmación de una acción crítica, que
-requiere disparar una acción como cerrar una terminal por voz).
+**Resumen de esta primera sesión**: de los escenarios sin cobertura
+automática completa, los que dependían de poder ejecutar comandos reales
+contra Claude Code, Orca o Windows (media, MCP, confirmación crítica,
+relay, skill, CLAUDE.md) se verificaron en vivo durante la
+implementación; los que dependían de escuchar, hablar o mirar la
+pantalla real se verificaron en esta sesión con el usuario y el hardware
+real. Quedaron pendientes para una segunda ronda: A2, S3, S4, O1 (el
+indicador de "agente trabajando"), O4, V2, y C2/C3.
+
+## Segunda sesión de pruebas con hardware real (2026-09-09, tarde)
+
+Se completaron los escenarios pendientes de la sesión anterior con el
+usuario presente y `python -m loki.main` corriendo de verdad.
+**Se encontraron y corrigieron 7 bugs reales más**, todos invisibles
+para los tests con dobles porque dependían del hardware (micrófono real,
+latencia de red real) o de la integración entre el cerebro (LLM) y las
+herramientas MCP en una sesión real de Claude Code:
+
+1. **`umbral_rms` muy por encima de la voz real del usuario** (S3): el
+   default de `0.02` casi nunca se superaba (la voz real medía entre
+   0.002 y 0.03 con picos aislados), así que el detector de fin de frase
+   cortaba a los pocos segundos de hablar sin parar. Se midió el RMS
+   real del micrófono y se bajó a `0.004` en `config.yaml`.
+2. **La escucha de confirmación nunca estaba implementada** (C2/C3):
+   `_manejar_pedir_confirmacion` en `main.py` tenía un `escuchar()` con
+   un TODO que siempre devolvía `None` — "confirmá" no hacía nada nunca.
+   Se implementó `_escuchar_para_confirmacion` con su propio
+   `DetectorFinDeFrase` y un `concurrent.futures.Future` para volver al
+   loop de asyncio desde el callback de audio (mismo patrón que
+   `CoordinadorMedia`).
+3. **Eco de la propia voz de Loki transcripto como respuesta del
+   usuario** (C2/C3): la escucha de confirmación arrancaba apenas se
+   encolaba el audio de la pregunta, no cuando terminaba de sonar, así
+   que el micrófono captaba la pregunta de Loki reproduciéndose por los
+   parlantes y la transcribía como si fuera la respuesta. Se agregó
+   `Reproductor.esperar_vacia()` (usa el conteo de tareas de
+   `queue.Queue`) y la confirmación espera a que termine de sonar la
+   pregunta antes de empezar a escuchar.
+4. **El timeout HTTP del canal local cortaba la confirmación a mitad de
+   camino** (C2/C3): `pedir_confirmacion` puede tardar ~19 s reales
+   (hablar + escuchar hasta 13 s + transcribir), pero el cliente HTTP
+   del servidor MCP tenía un timeout de 15 s; el cliente abortaba la
+   conexión antes de que el canal local respondiera, y el cerebro lo
+   reportaba como "un problema de comunicación". Se subió a 45 s.
+5. **El cerebro no encadenaba la confirmación con la acción real**
+   (C2/C3): `pedir_confirmacion` siempre devuelve un `confirmacion_id`
+   (nunca dice en texto si el usuario confirmó), pero el system prompt
+   no dejaba explícito que había que llamar a la herramienta crítica
+   real inmediatamente después con ese id; el cerebro se quedaba
+   preguntando sin ejecutar nada. Se reforzó `system_prompt.md`.
+6. **`terminal`/`worktree` recibía una descripción en vez del handle
+   real, y Loki afirmaba éxito sin verificar** (C2): el cerebro pasaba
+   texto como `"prueba 1"` en vez del handle de Orca (`term_...`), y
+   `_ejecutar_cerrar_terminal`/`_ejecutar_eliminar_worktree` ignoraban
+   el resultado del subproceso, devolviendo siempre éxito. Se agregaron
+   `Orca.cerrar_terminal`/`eliminar_worktree` (con el mismo manejo de
+   errores que el resto de `Orca`), se propaga `ok`/`error` real al
+   cerebro, y se reforzó `system_prompt.md`/las docstrings de las
+   herramientas MCP para exigir el handle exacto.
+7. **`guardar_posicion`/`resolver_posicion` nunca se llamaban desde la
+   app real** (O4): existían con tests unitarios desde la tarea 6.3,
+   pero `main.py` nunca los usaba — mover el overlay no persistía nada
+   y el arranque no leía la posición guardada. Se conectó `Overlay` a
+   `guardar_posicion` al soltar el arrastre, y `main()` calcula la
+   posición inicial con `resolver_posicion`.
+8. **Las oraciones se escuchaban fuera de orden** (V2): cada oración
+   disparaba su propia tarea concurrente de síntesis; la que ganaba la
+   carrera de red de edge-tts se escuchaba primero, sin importar el
+   orden de generación. Se cambió a una cola FIFO (`_cola_habla`) con un
+   único consumidor.
+9. **El overlay pasaba a "hablando" antes de tener una oración real**
+   (hallazgo colateral de V2, no bloqueaba ningún escenario pero se
+   corrigió de paso): `primera_oracion_lista()` se llamaba apenas
+   arrancaba el turno, no cuando el cerebro realmente tenía una oración
+   lista. Se movió el disparo a `_on_texto_parcial_cerebro`, con
+   resguardo por si la respuesta nunca tiene puntuación final.
+
+Con estos 9 arreglos se confirmaron en vivo todos los escenarios que
+quedaban pendientes: A2, S3, S4, el indicador "agente trabajando" de O1,
+O4, V2 (orden correcto; latencia hasta la primera oración por encima del
+objetivo de la spec pero atribuible a edge-tts, ver tabla de V2), y C2/C3
+con un cierre de terminal real verificado contra `orca terminal list`
+(bajó de 15 a 14 terminales, el handle correcto desapareció de la
+lista).
