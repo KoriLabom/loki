@@ -1,0 +1,68 @@
+# Configuración por defecto de Loki. Se commitea.
+# Los overrides privados van en config.local.yaml (ignorado por git).
+
+modelos:
+  cerebro: haiku
+  explore: fable
+  propose: fable
+  apply: sonnet
+
+voz:
+  nombre: es-MX-DaliaNeural
+
+transcripcion:
+  timeout_s: 15
+
+audio:
+  wake_word:
+    modelo: modelos/hey_jarvis.onnx
+    umbral: 0.5
+  fin_de_frase:
+    umbral_rms: 0.004
+    silencio_s: 1.2
+    sin_voz_s: 5
+    maximo_s: 30
+
+confirmacion:
+  espera_respuesta_s: 10
+  validez_s: 60
+
+acciones_criticas:
+  - cerrar_terminal
+  - eliminar_worktree
+  - enviar_a_terminal_no_claude
+
+cerebro:
+  allowed_tools:
+    - "Bash(orca *)"
+    - "Read"
+    - "Glob"
+    - "Grep"
+    - "mcp__loki__*"
+  disallowed_tools:
+    - "Bash(orca terminal close*)"
+    - "Bash(orca worktree rm*)"
+    - "Bash(orca terminal send*)"
+    - "Write"
+    - "Edit"
+    - "Bash(rm *)"
+    - "Bash(del *)"
+    - "Bash(Remove-Item*)"
+  timeout_turno_s: 120
+
+canal_local:
+  puerto: 8765
+
+overlay:
+  posicion: null
+
+auditoria_privacidad:
+  # Rutas (glob) exentas por completo: fixtures de test con datos de
+  # ejemplo, y el propio script de auditoría, cuyas líneas que definen
+  # los patrones de detección siempre los matchean contra sí mismas.
+  archivos_permitidos:
+    - "tests/**"
+    - "scripts/auditar_privacidad.py"
+  # Regex sobre el contenido de la línea: para casos puntuales fuera de
+  # los archivos permitidos arriba.
+  patrones_permitidos: []

@@ -1,0 +1,21 @@
+# Vocabulario del usuario para sesgo léxico de Whisper y glosario del rewriter.
+# Una entrada por línea con la forma canónica del término.
+# Lineas en blanco y las que arrancan con # se ignoran.
+# Los cambios aplican al próximo arranque de la app (no hay watcher).
+
+Claude Code
+Claude
+Anthropic
+Groq
+OpenSpec
+PyQt6
+faster-whisper
+Whisper
+Python
+JavaScript
+TypeScript
+PowerShell
+.ps1
+Read-Host
+Write-Host
+cmdlet
